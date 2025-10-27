@@ -242,7 +242,7 @@
     // Data storage
     const SUPABASE_URL = 'https://wocydpvvlfjtmnbtdlwu.supabase.co';
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndvY3lkcHZ2bGZqdG1uYnRkbHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1MTk4MTUsImV4cCI6MjA3NzA5NTgxNX0.2kDyF3WA2tjqi88XAafpcDTglmhpGACVrSCGBifKoBI';
-    const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     let currentUser = null;
     let files = [];
     let selectedFile = null;
@@ -577,7 +577,7 @@
     }
 
     container.innerHTML = myFiles.map(file => {
-        const publicUrl = supabase.storage.from('exam-files').getPublicUrl(folderPath + '/' + file.name).data.publicUrl;
+        const publicUrl = supabaseClient.storage.from('exam-files').getPublicUrl(folderPath + '/' + file.name).data.publicUrl;
         return `
             <div class="file-item bg-gray-50 rounded-lg p-4 flex items-center justify-between">
                 <div>
@@ -607,7 +607,7 @@
     // Fungsi rekursif untuk mengambil semua file dari semua folder
     async function listAllFiles(path = '') {
         let allFiles = [];
-        const { data, error } = await supabase.storage.from('exam-files').list(path);
+        const { data, error } = await supabaseClient.storage.from('exam-files').list(path);
 
         if (error) {
             console.error("Error listing files:", error.message);
@@ -655,7 +655,7 @@ function displayFiles(filesToShow) {
         const className = metadata.class || 'N/A';
         const schoolLevel = metadata.schoolLevel || '';
 
-        const publicUrl = supabase.storage.from('exam-files').getPublicUrl(file.fullPath).data.publicUrl;
+        const publicUrl = supabaseClient.storage.from('exam-files').getPublicUrl(file.fullPath).data.publicUrl;
         const displayName = file.name.split('-').slice(1).join('-'); // Hapus timestamp
 
         return `
