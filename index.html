@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SoAL-HIKAM</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body {
             box-sizing: border-box;
@@ -239,8 +240,11 @@
 
 <script>
     // Data storage
+    const SUPABASE_URL = 'https://wocydpvvlfjtmnbtdlwu.supabase.co';
+    const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndvY3lkcHZ2bGZqdG1uYnRkbHd1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE1MTk4MTUsImV4cCI6MjA3NzA5NTgxNX0.2kDyF3WA2tjqi88XAafpcDTglmhpGACVrSCGBifKoBI';
+    const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
     let currentUser = null;
-    let files = JSON.parse(localStorage.getItem('examFiles') || '[]');
+    let files = [];
     let selectedFile = null;
     let selectedSchoolLevel = null;
 
@@ -492,173 +496,188 @@
         fileInput.value = '';
     });
 
-    uploadBtn.addEventListener('click', function() {
-        if (selectedFile && currentUser) {
-            // Convert file to base64
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                const fileData = {
-                    id: Date.now(),
-                    name: selectedFile.name,
-                    size: selectedFile.size,
+    uploadBtn.addEventListener('click', async function() { // Tambahkan 'async'
+    if (selectedFile && currentUser) {
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = 'Mengupload...';
+
+        // Membuat nama file unik untuk menghindari tumpang tindih
+        const fileName = `${Date.now()}-${selectedFile.name}`;
+        const filePath = `${currentUser.schoolLevel}/${currentUser.class}/${fileName}`;
+
+        // Upload file ke Supabase Storage
+        const { data, error } = await supabase
+            .storage
+            .from('exam-files') // Nama bucket Anda
+            .upload(filePath, selectedFile, {
+                cacheControl: '3600',
+                upsert: false,
+                // Simpan metadata tambahan
+                contentType: selectedFile.type,
+                customMetadata: {
+                    teacherName: currentUser.name,
                     subject: currentUser.subject,
                     class: currentUser.class,
-                    schoolLevel: currentUser.schoolLevel,
-                    teacherName: currentUser.name,
-                    uploadDate: new Date().toISOString(),
-                    teacher: `${currentUser.name} - ${currentUser.subject} (${currentUser.class})`,
-                    data: e.target.result // Base64 data
-                };
-
-                // Check localStorage size
-                const currentSize = JSON.stringify(files).length;
-                const newSize = JSON.stringify(fileData).length;
-                
-                if (currentSize + newSize > 4.5 * 1024 * 1024) { // 4.5MB limit
-                    showMessage('Peringatan: Kapasitas penyimpanan hampir penuh! Hapus file lama atau hubungi admin.', 'error');
-                    return;
+                    schoolLevel: currentUser.schoolLevel
                 }
+            });
 
-                files.push(fileData);
-                localStorage.setItem('examFiles', JSON.stringify(files));
-
-                // Reset form
-                selectedFile = null;
-                fileInfo.classList.add('hidden');
-                uploadBtn.disabled = true;
-                fileInput.value = '';
-
-                // Reload files
-                loadTeacherFiles();
-
-                // Show success message
-                showMessage('File berhasil diupload!', 'success');
-            };
-            
-            reader.onerror = function() {
-                showMessage('Gagal membaca file!', 'error');
-            };
-            
-            reader.readAsDataURL(selectedFile);
-        }
-    });
-
-    function loadTeacherFiles() {
-        const myFiles = files.filter(file => 
-            file.subject === currentUser.subject && 
-            file.class === currentUser.class && 
-            file.teacherName === currentUser.name
-        );
-
-        const container = document.getElementById('myFiles');
-        
-        if (myFiles.length === 0) {
-            container.innerHTML = '<p class="text-gray-500 text-center py-8">Belum ada file yang diupload</p>';
+        if (error) {
+            // Jika gagal upload
+            showMessage('Gagal mengupload file: ' + error.message, 'error');
+            uploadBtn.textContent = 'Upload File Soal';
             return;
         }
 
-        container.innerHTML = myFiles.map(file => `
+        // Jika berhasil
+        showMessage('File berhasil diupload!', 'success');
+
+        // Reset form
+        selectedFile = null;
+        fileInfo.classList.add('hidden');
+        uploadBtn.textContent = 'Upload File Soal';
+        fileInput.value = '';
+
+        // Muat ulang daftar file
+        if (currentUser.isAdmin) {
+            loadAdminView();
+        } else {
+            loadTeacherFiles();
+        }
+    }
+});
+
+    async function loadTeacherFiles() { // Tambahkan 'async'
+    const container = document.getElementById('myFiles');
+    container.innerHTML = '<p class="text-gray-500 text-center py-8">Memuat file...</p>';
+
+    // Path folder di Supabase
+    const folderPath = `${currentUser.schoolLevel}/${currentUser.class}`;
+
+    const { data: fileList, error } = await supabase
+        .storage
+        .from('exam-files')
+        .list(folderPath, {
+            limit: 100,
+            offset: 0,
+            sortBy: { column: 'created_at', order: 'desc' },
+        });
+
+    if (error) {
+        container.innerHTML = `<p class="text-red-500 text-center py-8">Gagal memuat file: ${error.message}</p>`;
+        return;
+    }
+
+    // Filter file berdasarkan nama guru dari metadata
+    const myFiles = fileList.filter(file => file.metadata.customMetadata.teacherName === currentUser.name);
+
+    if (myFiles.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-8">Belum ada file yang diupload</p>';
+        return;
+    }
+
+    container.innerHTML = myFiles.map(file => {
+        const publicUrl = supabase.storage.from('exam-files').getPublicUrl(folderPath + '/' + file.name).data.publicUrl;
+        return `
             <div class="file-item bg-gray-50 rounded-lg p-4 flex items-center justify-between">
-                <div class="flex items-center">
-                    <svg class="h-8 w-8 text-indigo-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                    </svg>
-                    <div>
-                        <p class="font-medium text-gray-900">${file.name}</p>
-                        <p class="text-sm text-gray-500">${formatFileSize(file.size)} • ${formatDate(file.uploadDate)}</p>
-                        <p class="text-xs text-indigo-600 mt-1">Format: .docx</p>
-                    </div>
+                <div>
+                    <p class="font-medium text-gray-900">${file.name.split('-').slice(1).join('-')}</p>
+                    <p class="text-sm text-gray-500">${formatFileSize(file.metadata.size)} • ${formatDate(file.created_at)}</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <button onclick="downloadFile(${file.id})" class="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg transition-colors" title="Unduh File">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
-                        </svg>
-                    </button>
-                    <button onclick="deleteFile(${file.id})" class="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg transition-colors" title="Hapus File">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-                        </svg>
+                    <a href="${publicUrl}" target="_blank" class="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg" title="Unduh File">
+                        <!-- Ikon Download -->
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    </a>
+                    <button onclick="deleteFile('${folderPath + '/' + file.name}')" class="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg" title="Hapus File">
+                        <!-- Ikon Hapus -->
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                     </button>
                 </div>
             </div>
-        `).join('');
-    }
+        `;
+    }).join('');
+}
 
-    function loadAdminView() {
-        const container = document.getElementById('allFiles');
-        const totalFilesSpan = document.getElementById('totalFiles');
-        
-        
-        // Update total files count
-        totalFilesSpan.textContent = files.length;
+    async function loadAdminView() { // Tambahkan 'async'
+    const container = document.getElementById('allFiles');
+    const totalFilesSpan = document.getElementById('totalFiles');
+    container.innerHTML = '<p class="text-gray-500 text-center py-8">Memuat semua file...</p>';
 
-        // Populate filter options
-        const classes = [...new Set(files.map(f => f.class))].filter(c => c).sort((a, b) => {
-            // Custom sort untuk kelas (VII-A, VIII-B, X-DKV, etc)
-            const getClassOrder = (className) => {
-                if (className.startsWith('VII')) return 1;
-                if (className.startsWith('VIII')) return 2;
-                if (className.startsWith('IX')) return 3;
-                if (className.startsWith('X-')) return 4;
-                if (className.startsWith('XI')) return 5;
-                if (className.startsWith('XII')) return 6;
-                return 7;
-            };
-            return getClassOrder(a) - getClassOrder(b) || a.localeCompare(b);
-            
-        });
-        const schoolLevels = [...new Set(files.map(f => f.schoolLevel))].filter(s => s);
+    // Fungsi rekursif untuk mengambil semua file dari semua folder
+    async function listAllFiles(path = '') {
+        let allFiles = [];
+        const { data, error } = await supabase.storage.from('exam-files').list(path);
 
-        const subjectFilter = document.getElementById('adminFilterSubject');
-        const classFilter = document.getElementById('adminFilterClass');
+        if (error) {
+            console.error("Error listing files:", error.message);
+            return [];
+        }
 
-        // Populate class filter
-        classFilter.innerHTML = '<option value="">Semua Kelas</option>' +
-            classes.map(c => `<option value="${c}">${c}</option>`).join('');
-
-        // Initially disable subject filter
-        subjectFilter.innerHTML = '<option value="">-- Pilih Kelas Terlebih Dahulu --</option>';
-        subjectFilter.disabled = true;
-
-        // Remove old event listeners if any
-        const newSubjectFilter = subjectFilter.cloneNode(true);
-        const newClassFilter = classFilter.cloneNode(true);
-        subjectFilter.parentNode.replaceChild(newSubjectFilter, subjectFilter);
-        classFilter.parentNode.replaceChild(newClassFilter, classFilter);
-        
-        // Add event listener to class filter to update subject filter
-        document.getElementById('adminFilterClass').addEventListener('change', function() {
-            const selectedClass = this.value;
-            const subjectFilterElement = document.getElementById('adminFilterSubject');
-            
-            if (selectedClass) {
-                // Get subjects that have files in selected class
-                const subjectsInClass = [...new Set(
-                    files
-                        .filter(f => f.class === selectedClass)
-                        .map(f => f.subject)
-                )].filter(s => s).sort();
-                
-                subjectFilterElement.innerHTML = '<option value="">Semua Mata Pelajaran</option>' +
-                    subjectsInClass.map(s => `<option value="${s}">${s}</option>`).join('');
-                
-                subjectFilterElement.disabled = false;
-            } else {
-                // Reset if no class selected
-                subjectFilterElement.innerHTML = '<option value="">-- Pilih Kelas Terlebih Dahulu --</option>';
-                subjectFilterElement.disabled = true;
+        for (const file of data) {
+            if (file.id === null) { // Ini adalah folder
+                const nestedFiles = await listAllFiles(path ? `${path}/${file.name}` : file.name);
+                allFiles = allFiles.concat(nestedFiles.map(f => ({ ...f, fullPath: (path ? `${path}/${file.name}` : file.name) + '/' + f.name })));
+            } else { // Ini adalah file
+                allFiles.push({ ...file, fullPath: path ? `${path}/${file.name}` : file.name });
             }
-            
-            // Trigger filter update
-            filterFiles();
-        });
-
-        // Add filter event listener for subject
-        document.getElementById('filterSubject').addEventListener('change', filterFiles);
-
-        displayFiles(files);
+        }
+        return allFiles;
     }
+
+    const allFilesList = await listAllFiles();
+
+    // Simpan daftar file global untuk filtering
+    files = allFilesList;
+    totalFilesSpan.textContent = files.length;
+
+    // Panggil fungsi untuk menampilkan file (yang akan kita buat/modifikasi)
+    displayFiles(files);
+
+    // (Opsional) Anda bisa memodifikasi filter admin di sini jika diperlukan
+    // Untuk saat ini, kita tampilkan semua file terlebih dahulu.
+    // Fungsi filterFiles() yang ada mungkin perlu penyesuaian.
+}
+
+// Modifikasi juga fungsi displayFiles
+function displayFiles(filesToShow) {
+    const container = document.getElementById('allFiles');
+
+    if (filesToShow.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-8">Tidak ada file yang ditemukan</p>';
+        return;
+    }
+
+    container.innerHTML = filesToShow.map(file => {
+        const metadata = file.metadata.customMetadata || {};
+        const teacherName = metadata.teacherName || 'N/A';
+        const subject = metadata.subject || 'N/A';
+        const className = metadata.class || 'N/A';
+        const schoolLevel = metadata.schoolLevel || '';
+
+        const publicUrl = supabase.storage.from('exam-files').getPublicUrl(file.fullPath).data.publicUrl;
+        const displayName = file.name.split('-').slice(1).join('-'); // Hapus timestamp
+
+        return `
+            <div class="file-item bg-gray-50 rounded-lg p-4 flex items-center justify-between">
+                <div>
+                    <p class="font-medium text-gray-900">${displayName}</p>
+                    <p class="text-sm text-gray-500">${formatFileSize(file.metadata.size)} • ${formatDate(file.created_at)}</p>
+                    <p class="text-sm text-indigo-600 font-medium">${teacherName} - ${subject} (${className})</p>
+                    ${schoolLevel ? `<p class="text-xs text-gray-400">${schoolLevel}</p>` : ''}
+                </div>
+                <div class="flex items-center gap-2">
+                    <a href="${publicUrl}" target="_blank" class="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg" title="Unduh File">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    </a>
+                    <button onclick="deleteFile('${file.fullPath}')" class="bg-red-500 hover:bg-red-600 text-white p-2 rounded-lg" title="Hapus File">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
 
     function filterFiles() {
         const subjectFilterElement = document.getElementById('adminFilterSubject');
@@ -720,76 +739,32 @@
         `).join('');
     }
 
-    function downloadFile(fileId) {
-        const file = files.find(f => f.id === fileId);
-        
-        if (!file) {
-            showMessage('File tidak ditemukan!', 'error');
-            return;
-        }
-        
-        if (!file.data) {
-            showMessage('Data file tidak tersedia untuk diunduh!', 'error');
-            return;
-        }
-        
-        try {
-            // Convert base64 to blob
-            const byteString = atob(file.data.split(',')[1]);
-            const mimeString = file.data.split(',')[0].split(':')[1].split(';')[0];
-            
-            const ab = new ArrayBuffer(byteString.length);
-            const ia = new Uint8Array(ab);
-            
-            for (let i = 0; i < byteString.length; i++) {
-                ia[i] = byteString.charCodeAt(i);
-            }
-            
-            const blob = new Blob([ab], { type: mimeString });
-            
-            // Create download link
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = file.name;
-            document.body.appendChild(a);
-            a.click();
-            
-            // Cleanup
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-            
-            showMessage('File berhasil diunduh!', 'success');
-        } catch (error) {
-            showMessage('Gagal mengunduh file!', 'error');
-            console.error('Download error:', error);
-        }
+    async function deleteFile(filePath) { // Argumen diubah menjadi filePath
+    // Konfirmasi sebelum hapus
+    if (!confirm(`Apakah Anda yakin ingin menghapus file ini?\nTindakan ini tidak dapat dibatalkan!`)) {
+        return;
     }
 
-    function deleteFile(fileId) {
-        const fileToDelete = files.find(f => f.id === fileId);
-        
-        if (!fileToDelete) {
-            showMessage('File tidak ditemukan!', 'error');
-            return;
-        }
-        
-        // Konfirmasi sebelum hapus
-        if (!confirm(`Apakah Anda yakin ingin menghapus file "${fileToDelete.name}"?\n\nTindakan ini tidak dapat dibatalkan!`)) {
-            return;
-        }
-        
-        files = files.filter(f => f.id !== fileId);
-        localStorage.setItem('examFiles', JSON.stringify(files));
+    // Hapus file dari Supabase Storage
+    const { data, error } = await supabase
+        .storage
+        .from('exam-files') // Nama bucket Anda
+        .remove([filePath]);
 
-        if (currentUser.isAdmin) {
-            loadAdminView();
-        } else {
-            loadTeacherFiles();
-        }
-
-        showMessage('File berhasil dihapus!', 'success');
+    if (error) {
+        showMessage('Gagal menghapus file: ' + error.message, 'error');
+        return;
     }
+
+    showMessage('File berhasil dihapus!', 'success');
+
+    // Muat ulang daftar file untuk memperbarui tampilan
+    if (currentUser.isAdmin) {
+        loadAdminView();
+    } else {
+        loadTeacherFiles();
+    }
+}
 
     function formatFileSize(bytes) {
         if (bytes === 0) return '0 Bytes';
